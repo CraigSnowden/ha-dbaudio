@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import struct
 from typing import Any, Callable, Optional
 
@@ -15,6 +16,10 @@ PRESET_COUNT = 15
 
 _PRESETS_ROLE = "AmpPresets"
 
+# Only expose the analog (A1-A4) and AES3/digital (D1-D4) input-enable sources as
+# switches; Milan (M1-M8) and C1/C2 sources are discovered but skipped by default.
+_INPUT_ENABLE_LABEL_RE = re.compile(r"^Input ([AD])(\d+)$")
+
 
 def _extract(result: Any) -> Any:
     """Return the first value from an aes70py Arguments object or the value itself."""
@@ -23,6 +28,17 @@ def _extract(result: Any) -> Any:
     if hasattr(result, "values") and isinstance(result.values, (list, tuple)):
         return result.values[0]
     return result
+
+
+def _extract_values(result: Any) -> list:
+    """Return all values ([position, min, max]) from an OcaSwitch-style GetPosition() result."""
+    if hasattr(result, "values") and isinstance(result.values, (list, tuple)):
+        return list(result.values)
+    if hasattr(result, "item"):
+        return [result.item(0)]
+    if isinstance(result, (list, tuple)):
+        return list(result)
+    return [result]
 
 
 class DBAudioDevice:
@@ -54,6 +70,12 @@ class DBAudioDevice:
             "delay_enable": [False] * CHANNEL_COUNT,
             "eq_bypass": [[False] * eq_count for _ in range(CHANNEL_COUNT)],
             "input_gain_enable": False,
+            "input_override_mode": 0,
+            "input_override_mode_options": [],
+            "input_override_source": 0,
+            "input_override_source_options": [],
+            "input_enable_sources": [],  # source labels discovered at connect, e.g. ["A1", "D2"]
+            "input_enable": {},  # "{source_label}_{ch}" -> bool
             "preset_names": [],
             "preset_last": None,
             "power_hours": 0.0,
@@ -75,6 +97,11 @@ class DBAudioDevice:
         self._delay_enable_objs: list = []
         self._eq_objs: list[list] = []
         self._input_gain_obj = None
+        self._input_override_mode_obj = None
+        self._input_override_mode_min = 0
+        self._input_override_source_obj = None
+        self._input_override_source_min = 0
+        self._input_enable_objs: dict[tuple[str, int], Any] = {}
         self._preset_obj = None
         self._preset_name_objs: list = []
         self._preset_last_objs: list = []
@@ -143,6 +170,9 @@ class DBAudioDevice:
             _LOGGER.debug("Could not read DeviceName")
 
         self._role_map = await self._device.get_role_map()
+        input_roles = [path for path in self._role_map if "Input" in path]
+        if input_roles:
+            _LOGGER.debug("Role map paths containing 'Input': %s", input_roles)
 
         await self._init_power()
         await self._init_mute(OcaMute, OcaMuteState)
@@ -151,6 +181,8 @@ class DBAudioDevice:
         await self._init_delay_enables()
         await self._init_eq()
         await self._init_input_gain()
+        await self._init_input_override()
+        await self._init_input_enable_matrix()
         await self._init_speaker_ids()
         await self._init_power_hours()
         if self._has_presets():
@@ -466,6 +498,139 @@ class DBAudioDevice:
             await self._input_gain_obj.SetPosition(1 if enabled else 0)
         except Exception as exc:
             _LOGGER.warning("set_input_gain_enable failed: %s", exc)
+
+    # --- Input override (manual input source selection) ---
+
+    async def _init_enum_switch(
+        self, path: str, state_key: str, options_key: str
+    ) -> tuple[Any, int]:
+        """Init an OcaSwitch-style object exposing GetPosition()->[pos,min,max] and GetPositionNames().
+
+        Returns (obj, min_value) so callers can convert a 0-based option index back to a
+        device position with `index + min_value`.
+        """
+        obj = self._role_map.get(path)
+        if obj is None:
+            _LOGGER.debug("Enum switch object not found at %s", path)
+            return None, 0
+
+        try:
+            names = await obj.GetPositionNames()
+            self.state[options_key] = list(names)
+        except Exception as exc:
+            _LOGGER.debug("Could not read position names for %s: %s", path, exc)
+
+        min_value = 0
+        try:
+            position, min_value, _max = _extract_values(await obj.GetPosition())
+            self.state[state_key] = int(position) - int(min_value)
+        except Exception as exc:
+            _LOGGER.debug("Could not read position for %s: %s", path, exc)
+
+        def _on_change(val: Any, _key: str = state_key, _min: int = min_value) -> None:
+            self.state[_key] = int(val) - _min
+            self._notify_update()
+
+        self._subscribe(obj.OnPositionChanged, _on_change)
+        return obj, min_value
+
+    async def _init_input_override(self) -> None:
+        self._input_override_mode_obj, self._input_override_mode_min = (
+            await self._init_enum_switch(
+                f"{self._settings_path()}/Settings_InputOverrideMode",
+                "input_override_mode",
+                "input_override_mode_options",
+            )
+        )
+        self._input_override_source_obj, self._input_override_source_min = (
+            await self._init_enum_switch(
+                f"{self._settings_path()}/Settings_InputOverrideSource",
+                "input_override_source",
+                "input_override_source_options",
+            )
+        )
+
+    async def set_input_override_mode(self, index: int) -> None:
+        if self._input_override_mode_obj is None:
+            return
+        try:
+            await self._input_override_mode_obj.SetPosition(
+                index + self._input_override_mode_min
+            )
+        except Exception as exc:
+            _LOGGER.warning("set_input_override_mode failed: %s", exc)
+
+    async def set_input_override_source(self, index: int) -> None:
+        if self._input_override_source_obj is None:
+            return
+        try:
+            await self._input_override_source_obj.SetPosition(
+                index + self._input_override_source_min
+            )
+        except Exception as exc:
+            _LOGGER.warning("set_input_override_source failed: %s", exc)
+
+    # --- Input enable matrix (per-channel routing gates for analog/AES3 sources) ---
+
+    async def _init_input_enable_matrix(self) -> None:
+        """Discover Config_InputEnable objects and group them by source and channel.
+
+        Each source (e.g. "A1", "D2") has CHANNEL_COUNT instances in the role map with
+        no fixed path naming, but each instance's `ono` increases by a fixed stride per
+        channel (same pattern as DELAY_5D_OFFSET) - sorting by ono recovers channel order.
+        """
+        groups: dict[str, list[tuple[int, Any]]] = {}
+
+        for path, obj in self._role_map.items():
+            if "InputEnable" not in path:
+                continue
+            try:
+                label = await obj.GetLabel()
+            except Exception:
+                continue
+            match = _INPUT_ENABLE_LABEL_RE.match(label)
+            if match is None:
+                continue
+            source = match.group(1) + match.group(2)
+            groups.setdefault(source, []).append((obj.ono, obj))
+
+        sources: list[str] = []
+        for source in sorted(groups, key=lambda s: (s[0], int(s[1:]))):
+            instances = sorted(groups[source], key=lambda t: t[0])
+            if len(instances) < CHANNEL_COUNT:
+                _LOGGER.debug(
+                    "Expected %d input_enable instances for %s, found %d",
+                    CHANNEL_COUNT, source, len(instances),
+                )
+                continue
+            sources.append(source)
+
+            for ch, (_, obj) in enumerate(instances[:CHANNEL_COUNT]):
+                self._input_enable_objs[(source, ch)] = obj
+                key = f"{source}_{ch}"
+
+                try:
+                    result = await obj.GetPosition()
+                    self.state["input_enable"][key] = int(_extract(result)) == 1
+                except Exception as exc:
+                    _LOGGER.debug("Could not read input_enable %s: %s", key, exc)
+
+                def _on_change(val: Any, _key: str = key) -> None:
+                    self.state["input_enable"][_key] = int(val) == 1
+                    self._notify_update()
+
+                self._subscribe(obj.OnPositionChanged, _on_change)
+
+        self.state["input_enable_sources"] = sources
+
+    async def set_input_enable(self, source: str, ch: int, enabled: bool) -> None:
+        obj = self._input_enable_objs.get((source, ch))
+        if obj is None:
+            return
+        try:
+            await obj.SetPosition(1 if enabled else 0)
+        except Exception as exc:
+            _LOGGER.warning("set_input_enable %s ch%d failed: %s", source, ch, exc)
 
     # --- Speaker IDs ---
 

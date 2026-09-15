@@ -31,6 +31,12 @@ async def async_setup_entry(
 
     entities.append(DBAudioInputGainSwitch(coordinator, entry))
 
+    for source in coordinator.data.get("input_enable_sources", []):
+        for ch in range(CHANNEL_COUNT):
+            entities.append(
+                DBAudioInputEnableSwitch(coordinator, entry, source, ch, CHANNEL_LABELS[ch])
+            )
+
     async_add_entities(entities)
 
 
@@ -149,3 +155,32 @@ class DBAudioInputGainSwitch(DBAudioEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.set_input_gain_enable(False)
+
+
+class DBAudioInputEnableSwitch(DBAudioEntity, SwitchEntity):
+    """Whether a given input source (e.g. A1, D2) is routed into a given output channel."""
+
+    def __init__(
+        self,
+        coordinator: DBAudioCoordinator,
+        entry: ConfigEntry,
+        source: str,
+        ch: int,
+        label: str,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._source = source
+        self._ch = ch
+        self._attr_unique_id = f"{entry.entry_id}_input_enable_{source}_ch_{ch}"
+        self._attr_name = f"Input {source} Enable Ch {label}"
+
+    @property
+    def is_on(self) -> bool:
+        key = f"{self._source}_{self._ch}"
+        return bool(self.coordinator.data.get("input_enable", {}).get(key, False))
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.set_input_enable(self._source, self._ch, True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.set_input_enable(self._source, self._ch, False)

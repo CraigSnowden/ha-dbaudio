@@ -174,5 +174,14 @@ class DBAudioCoordinator:
     async def set_input_gain_enable(self, enabled: bool) -> None:
         await self._device.set_input_gain_enable(enabled)
 
+    async def set_input_override_mode(self, index: int) -> None:
+        await self._device.set_input_override_mode(index)
+
+    async def set_input_override_source(self, index: int) -> None:
+        await self._device.set_input_override_source(index)
+
+    async def set_input_enable(self, source: str, ch: int, enabled: bool) -> None:
+        await self._device.set_input_enable(source, ch, enabled)
+
     async def recall_preset(self, index: int) -> None:
         await self._device.recall_preset(index)
