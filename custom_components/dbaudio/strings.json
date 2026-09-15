@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to d&b audiotechnik Amplifier",
+        "data": {
+          "host": "IP Address",
+          "model": "Amplifier Model",
+          "port": "TCP Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the amplifier. Check the IP address and that the amp is powered on."
+    },
+    "abort": {
+      "already_configured": "This amplifier is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Update Connection",
+        "data": {
+          "host": "IP Address",
+          "port": "TCP Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the amplifier."
+    }
+  }
+}
