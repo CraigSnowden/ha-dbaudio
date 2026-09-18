@@ -28,6 +28,8 @@ async def async_setup_entry(
         entities.append(DBAudioDelayEnableSwitch(coordinator, entry, ch, label))
         for eq in range(eq_count):
             entities.append(DBAudioEQBypassSwitch(coordinator, entry, ch, eq, label))
+        entities.append(DBAudioCutSwitch(coordinator, entry, ch, label))
+        entities.append(DBAudioHFASwitch(coordinator, entry, ch, label))
 
     entities.append(DBAudioInputGainSwitch(coordinator, entry))
 
@@ -137,6 +139,56 @@ class DBAudioEQBypassSwitch(DBAudioEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.set_eq_bypass(self._ch, self._eq_idx, False)
+
+
+class DBAudioCutSwitch(DBAudioEntity, SwitchEntity):
+    def __init__(
+        self,
+        coordinator: DBAudioCoordinator,
+        entry: ConfigEntry,
+        ch: int,
+        label: str,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._ch = ch
+        self._attr_unique_id = f"{entry.entry_id}_cut_ch_{ch}"
+        self._attr_name = f"CUT Ch {label}"
+
+    @property
+    def is_on(self) -> bool:
+        values = self.coordinator.data.get("cut_enable", [])
+        return bool(values[self._ch]) if self._ch < len(values) else False
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.set_cut_enable(self._ch, True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.set_cut_enable(self._ch, False)
+
+
+class DBAudioHFASwitch(DBAudioEntity, SwitchEntity):
+    def __init__(
+        self,
+        coordinator: DBAudioCoordinator,
+        entry: ConfigEntry,
+        ch: int,
+        label: str,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._ch = ch
+        self._attr_unique_id = f"{entry.entry_id}_hfa_ch_{ch}"
+        self._attr_name = f"HFA Ch {label}"
+
+    @property
+    def is_on(self) -> bool:
+        values = self.coordinator.data.get("hfa_enable", [])
+        return bool(values[self._ch]) if self._ch < len(values) else False
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.set_hfa_enable(self._ch, True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.set_hfa_enable(self._ch, False)
 
 
 class DBAudioInputGainSwitch(DBAudioEntity, SwitchEntity):

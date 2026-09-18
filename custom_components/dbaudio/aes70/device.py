@@ -69,6 +69,8 @@ class DBAudioDevice:
             "delay": [0.0] * CHANNEL_COUNT,
             "delay_enable": [False] * CHANNEL_COUNT,
             "eq_bypass": [[False] * eq_count for _ in range(CHANNEL_COUNT)],
+            "cut_enable": [False] * CHANNEL_COUNT,
+            "hfa_enable": [False] * CHANNEL_COUNT,
             "input_gain_enable": False,
             "input_override_mode": 0,
             "input_override_mode_options": [],
@@ -96,6 +98,8 @@ class DBAudioDevice:
         self._delay_objs: list = []
         self._delay_enable_objs: list = []
         self._eq_objs: list[list] = []
+        self._cut_objs: list = []
+        self._hfa_objs: list = []
         self._input_gain_obj = None
         self._input_override_mode_obj = None
         self._input_override_mode_min = 0
@@ -180,6 +184,7 @@ class DBAudioDevice:
         await self._init_delays()
         await self._init_delay_enables()
         await self._init_eq()
+        await self._init_cut_hfa()
         await self._init_input_gain()
         await self._init_input_override()
         await self._init_input_enable_matrix()
@@ -469,6 +474,64 @@ class DBAudioDevice:
             await obj.SetPosition(0 if bypassed else 1)
         except Exception as exc:
             _LOGGER.warning("set_eq_bypass ch%d eq%d failed: %s", ch, eq_idx, exc)
+
+    # --- CUT / HFA filter enable ---
+    # Config_Filter1{ch} = "CUT", Config_Filter2{ch} = "HFA" (per the device's own
+    # ChStatus_Filter*Name label: "Name of filter (CUT, HFA,..)"). Same On/Off switch
+    # shape as EQ bypass above.
+
+    async def _init_cut_hfa(self) -> None:
+        self._cut_objs = []
+        self._hfa_objs = []
+
+        for i in range(1, CHANNEL_COUNT + 1):
+            ch = i - 1
+
+            cut_obj = self._role_map.get(f"{self._config_path()}/Config_Filter1{i}")
+            self._cut_objs.append(cut_obj)
+            if cut_obj is not None:
+                try:
+                    result = await cut_obj.GetPosition()
+                    self.state["cut_enable"][ch] = int(_extract(result)) == 1
+                except Exception as exc:
+                    _LOGGER.debug("Could not read cut_enable ch%d: %s", ch, exc)
+
+                def _on_cut(val: Any, _ch: int = ch) -> None:
+                    self.state["cut_enable"][_ch] = int(val) == 1
+                    self._notify_update()
+
+                self._subscribe(cut_obj.OnPositionChanged, _on_cut)
+
+            hfa_obj = self._role_map.get(f"{self._config_path()}/Config_Filter2{i}")
+            self._hfa_objs.append(hfa_obj)
+            if hfa_obj is not None:
+                try:
+                    result = await hfa_obj.GetPosition()
+                    self.state["hfa_enable"][ch] = int(_extract(result)) == 1
+                except Exception as exc:
+                    _LOGGER.debug("Could not read hfa_enable ch%d: %s", ch, exc)
+
+                def _on_hfa(val: Any, _ch: int = ch) -> None:
+                    self.state["hfa_enable"][_ch] = int(val) == 1
+                    self._notify_update()
+
+                self._subscribe(hfa_obj.OnPositionChanged, _on_hfa)
+
+    async def set_cut_enable(self, ch: int, enabled: bool) -> None:
+        if ch >= len(self._cut_objs) or self._cut_objs[ch] is None:
+            return
+        try:
+            await self._cut_objs[ch].SetPosition(1 if enabled else 0)
+        except Exception as exc:
+            _LOGGER.warning("set_cut_enable ch%d failed: %s", ch, exc)
+
+    async def set_hfa_enable(self, ch: int, enabled: bool) -> None:
+        if ch >= len(self._hfa_objs) or self._hfa_objs[ch] is None:
+            return
+        try:
+            await self._hfa_objs[ch].SetPosition(1 if enabled else 0)
+        except Exception as exc:
+            _LOGGER.warning("set_hfa_enable ch%d failed: %s", ch, exc)
 
     # --- Input gain enable ---
 

@@ -171,6 +171,12 @@ class DBAudioCoordinator:
     async def set_eq_bypass(self, ch: int, eq_idx: int, bypassed: bool) -> None:
         await self._device.set_eq_bypass(ch, eq_idx, bypassed)
 
+    async def set_cut_enable(self, ch: int, enabled: bool) -> None:
+        await self._device.set_cut_enable(ch, enabled)
+
+    async def set_hfa_enable(self, ch: int, enabled: bool) -> None:
+        await self._device.set_hfa_enable(ch, enabled)
+
     async def set_input_gain_enable(self, enabled: bool) -> None:
         await self._device.set_input_gain_enable(enabled)
 
