@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "documentation": "https://github.com/craigsnowden/ha-dbaudio",
   "requirements": [
-    "aes70py @ https://github.com/AES70py/aes70py/releases/download/1.0.2/aes70py-1.0.2-py3-none-any.whl"
+    "aes70py @ git+https://github.com/AES70py/aes70py.git@b01eee812bc4a56d83959bef98c5d9650de4a232"
   ],
   "dependencies": [],
   "codeowners": [],

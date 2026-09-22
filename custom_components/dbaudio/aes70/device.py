@@ -139,6 +139,10 @@ class DBAudioDevice:
         self._connection = tcp_connection.connect(host=self._host, port=self._port)
         self._device = RemoteDevice(self._connection)
         self._device.set_keepalive_interval(1)
+        # Skip aes70py's AddSubscription2 ("EV2") capability probe: d&b amps reject it with
+        # BadMethod, and concurrently subscribing to many objects during initialize() races
+        # that probe and leaves every subscription failing. Forcing V1 up front avoids it.
+        self._device._supportsEV2 = False
 
     def disconnect(self) -> None:
         """Close connection and release subscriptions. Thread-safe."""
@@ -203,13 +207,16 @@ class DBAudioDevice:
         if self.on_state_updated:
             self._dispatch(self.on_state_updated)
 
-    def _on_close(self) -> None:
+    def _on_close(self, *_args: Any) -> None:
+        # aes70py's Events.emit() passes the emitter itself as an extra leading arg;
+        # the exact count has varied across library versions, so accept anything.
         _LOGGER.warning("d&b amp %s:%s disconnected", self._host, self._port)
         self._cleanup_subscriptions()
         if self.on_disconnected:
             self._dispatch(self.on_disconnected)
 
-    def _on_error(self, error: Any) -> None:
+    def _on_error(self, *args: Any) -> None:
+        error = args[-1] if args else None
         _LOGGER.warning("d&b amp %s:%s error: %s", self._host, self._port, error)
         self._cleanup_subscriptions()
         if self.on_disconnected:
